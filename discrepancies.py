@@ -18,7 +18,7 @@ xgb_odd = XGBClassifier()
 xgb_odd.load_model('models/model_odd.json')
 
 import numpy as np
-
+from features import ml_features_config
 # %%
 def rdf2np(arrays, dimensions=3):
     if dimensions == 2:
@@ -37,7 +37,7 @@ def rdf2np(arrays, dimensions=3):
     return result
 
 def get_input_features():
-    from features import ml_features_config
+    
     feature_names = [feature.name for feature in ml_features_config]
     feature_names = feature_names.__str__().replace("[","{").replace("]","}").replace("'","")
 
@@ -48,31 +48,41 @@ def get_input_features():
     return rdf2np(input_features).transpose(0,2,1)
 
 # %%
-def predict_proba(xgb_model, ff_model, features):
+def rdf_predict_proba(ff_model, features):
+    inputs = features.transpose(0,2,1).tolist()
+    rdf_scores = [ 
+        ROOT.inference(
+                ROOT.VecOps.RVec[ROOT.RVecD](input), 
+                ff_model,
+        ) for input in inputs 
+    ]
+    return rdf2np(rdf_scores, dimensions=2)
 
-    rdf_scores = np.array(
-        [ROOT.inference(
-        ROOT.VecOps.RVec[ROOT.RVecD]( features_i ), ff_model
-        ) for features_i in features.transpose(0,2,1).tolist()]
-    )
-
-    xgb_scores = np.array(
+def xgb_predict_proba(xgb_model, features):
+    return np.array(
         [xgb_model.predict_proba(features_i)[:,1] for features_i in features]
     )
 
+def predict_proba(xgb_model, ff_model, features):
+    rdf_scores = rdf_predict_proba(ff_model, features)
+    xgb_scores = xgb_predict_proba(xgb_model, features)
     return rdf_scores, xgb_scores
 
 # %%
-input_real = get_input_features()[:1000] # only process first 1k events to save memory
-scores_rdf_real, scores_xgb_real = predict_proba(xgb_odd, ff_odd, input_real)
+input_features = get_input_features()
+scores_rdf, scores_xgb = predict_proba(xgb_odd, ff_odd, input_features)
 print(
-    f"maximum deviation with odd models: {np.abs(scores_rdf_real-scores_xgb_real).max()}"
+    f"maximum probability scores deviation with odd models: {np.abs(scores_rdf-scores_xgb).max()}"
 )
-
 # %%
-input_rnd = np.random.rand(input_real.shape[0], input_real.shape[1], input_real.shape[2])
-scores_rdf_rnd, scores_xgb_rnd = predict_proba(xgb_even, ff_even, input_rnd)
-print(
-    f"max dev on random input: {np.abs(scores_rdf_rnd-scores_xgb_rnd).max()}"
-)
+def apply_argmax(proba_scores, features):
+    res = np.empty((features.shape[0],features.shape[-1]))
+    for event in range(proba_scores.shape[0]):
+        res[event,:] = features[ event, proba_scores[event].argmax() , : ]
+    return res
 
+features_rdf = apply_argmax(scores_rdf, input_features)
+features_xgb = apply_argmax(scores_xgb, input_features)
+print(
+    f"maximum features deviation with odd models: {np.abs(features_rdf-features_xgb).max()}"
+)
